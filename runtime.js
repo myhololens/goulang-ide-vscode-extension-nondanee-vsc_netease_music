@@ -1,56 +1,36 @@
 const fs = require('fs')
-const ws = require('ws')
 const path = require('path')
 const events = require('events')
 const vscode = require('vscode')
 
 const ActiveEditor = () => {
 	let activeTextEditor = vscode.window.activeTextEditor
-	return {reveal: () => activeTextEditor ? vscode.window.showTextDocument(activeTextEditor.document, activeTextEditor.viewColumn, false) : undefined}
+	return {
+		reveal: () => activeTextEditor ? vscode.window.showTextDocument(activeTextEditor.document, activeTextEditor.viewColumn, false) : undefined
+	}
 }
 
 const GlobalStorage = context => {
 	return {
-		get: key => context.globalState.get(key),
-		set: (key, value) => context.globalState.update(key, value)
+		get: key => JSON.parse(context.globalState.get(key) || 'null'),
+		set: (key, value) => context.globalState.update(key, JSON.stringify(value))
 	}
 }
 
 const PreferenceReader = context => {
-	cache = {}
+	let preference = {}
 	return {
-		get: key => cache[key] ? key in cache : cache[key] = vscode.workspace.getConfiguration().get(`NeteaseMusic.${key}`),
-		dispose: () => cache = {}
-	}
-}
-
-const SceneKeeper = context => {
-	return {
-		save: (key, value) => runtime.globalStorage.set(key, JSON.stringify(value)),
-		restore: () => {
-			const load = (key, preset) => JSON.parse(runtime.globalStorage.get(key) || preset)
-			let list = load('list', '[]')
-			let radio = load('radio', 'false')
-			let index = load('index', '0')
-			controller.mode(load('mode', '0'))
-			controller.volumeChange(load('volume', '1'))
-			if (load('muted', 'false')) controller.mute()
-			if (list.length) controller.add(list, radio), controller.play(index, false)
-		}
+		get: key => key in preference ? preference[key] : preference[key] = vscode.workspace.getConfiguration().get(`NeteaseMusic.${key}`),
+		dispose: () => preference = null
 	}
 }
 
 const StateManager = context => {
-	const state = {}
+	let state = {}
 	return {
 		get: key => state[key],
-		set: (key, value) => {
-			state[key] = value
-			vscode.commands.executeCommand('setContext', `neteasemusic.${key}`, value)
-		},
-		dispose: () => Object.keys(state).forEach(key => 
-			vscode.commands.executeCommand('setContext', `neteasemusic.${key}`, undefined)
-		)
+		set: (key, value) => vscode.commands.executeCommand('setContext', `neteasemusic.${key}`, state[key] = value),
+		dispose: () => (Object.keys(state).forEach(key => vscode.commands.executeCommand('setContext', `neteasemusic.${key}`, undefined)), state = null)
 	}
 }
 
@@ -68,26 +48,32 @@ const PlayerBar = context => {
 		},
 		repeat: {
 			command: 'neteasemusic.mode.loop',
-			icon: ' $(sync) ',
+			icon: '\u2006$(sync)\u2006',
 			title: '播放模式: 循环播放',
 			state: {mode: 0}
 		},
 		random: {
 			command: 'neteasemusic.mode.repeat',
-			icon: ' $(pin) ',
+			icon: '$(pin)',
 			title: '播放模式: 单曲循环',
 			state: {mode: 1}
 		},
-		loop: {
+		intelligent: { // action to intelligent or loop
 			command: 'neteasemusic.mode.random',
-			icon: ' $(light-bulb) ',
+			icon: '\u2006$(light-bulb)\u2006',
 			title: '播放模式: 随机播放',
 			state: {mode: 2}
+		},
+		loop: {
+			command: 'neteasemusic.mode.intelligent',
+			icon: '\u2006$(pulse)',
+			title: '播放模式: 心动模式',
+			state: {mode: 3}
 		},
 		play: {
 			command: 'neteasemusic.play',
 			// icon: '▶'
-			icon: ' $(triangle-right) ',
+			icon: '\u2004$(triangle-right)\u2004',
 			title: '播放',
 			state: {playing: false}
 		},
@@ -100,14 +86,14 @@ const PlayerBar = context => {
 		},
 		like: {
 			command: 'neteasemusic.like',
-			icon: ' $(heart) ',
+			icon: '\u2006$(heart)\u2006',
 			title: '红心',
 			color: 'rgba(255,255,255,0.5)',
 			state: {liked: false}
 		},
 		dislike: {
 			command: 'neteasemusic.dislike',
-			icon: ' $(heart) ',
+			icon: '\u2006$(heart)\u2006',
 			title: '取消红心',
 			state: {liked: true}
 		},
@@ -135,44 +121,42 @@ const PlayerBar = context => {
 		},
 		more: {
 			command: 'neteasemusic.more',
-			icon: '$(kebab-horizontal)',
+			icon: '\u2006$(kebab-horizontal)\u2006',
 			title: '更多操作'
 		}
 	}
 
-	const bind = (item, button) => {
+	const attach = (item, button) => {
 		item.color = button.color || undefined
 		item.text = button.icon
 		item.command = button.command
 		item.tooltip = button.title || undefined
-		if (button.state) Object.keys(button.state).forEach(key => runtime.stateManager.set(key, button.state[key]))
+		if (button.state) Object.entries(button.state).forEach(entry => runtime.stateManager.set.apply(null, entry))
 	}
 
-	const order = [['list'], ['like', 'dislike'], ['previous'], ['play', 'pause'], ['next'], ['repeat', 'random', 'loop'], ['mute', 'unmute'], ['volume'], ['more']].reverse()
-	
+	const order = [['list'], ['like', 'dislike'], ['previous'], ['play', 'pause'], ['next'], ['repeat', 'random', 'intelligent', 'loop'], ['mute', 'unmute'], ['volume'], ['more']].reverse()
+
 	const items = order.map((group, index) => {
 		group.forEach(name => buttons[name].index = index)
 		let item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 163 + index)
-		bind(item, buttons[group[0]])
+		attach(item, buttons[group[0]])
 		return item
 	})
-	
+
 	return {
-		dispose: () => {
-			items.forEach(item => item.dispose())
-		},
+		dispose: () => items.forEach(item => item.dispose()),
 		state: state => {
 			if (!(state in buttons)) return
-			if (state.includes('like')) api.user.account() ? items[buttons.like.index].show() : items[buttons.like.index].hide()
+			if (state.includes('like')) (api.user.account() && !runtime.stateManager.get('program')) ? items[buttons.like.index].show() : items[buttons.like.index].hide()
 			let index = buttons[state].index
 			let name = order[index][(order[index].indexOf(state) + 1) % order[index].length]
-			bind(items[index], buttons[name])
+			attach(items[index], buttons[name])
 		},
 		update: text => {
 			items[buttons.list.index].text = text
 		},
 		volume: state => {
-			bind(items[buttons.mute.index], buttons[(state.muted ? 'unmute' : 'mute')])
+			attach(items[buttons.mute.index], buttons[(state.muted ? 'unmute' : 'mute')])
 			items[buttons.volume.index].color = items[buttons.mute.index].color
 			items[buttons.volume.index].text = `${state.value.toFixed(2) * 100}`
 		},
@@ -189,20 +173,77 @@ const PlayerBar = context => {
 }
 
 const DuplexChannel = context => {
-	let webSocket = null
 	let activeEditor = ActiveEditor()
-	
-	const webSocketd = new ws.Server({port: 16363})
-	.once('connection', connection => {
-		webSocket = connection
-		.on('message', message => {
-			let data = JSON.parse(message)
-			receiveMessage(data.type, data.body)
-		})
-		.on('close', () => runtime.event.emit('suspend'))
-	})
 
-	const receiveMessage = (type, body) => {
+	const logger = song => {
+		const translation = {'playlist': 'list', 'artist': 'artist', 'album': 'album'}
+		const output = {
+			id: song.id,
+			type: 'song',
+			wifi: 0,
+			download: 0,
+			time: parseInt(song.duration),
+			end: (runtime.stateManager.get('mode') == 1 ? 'playend' : 'ui')
+		}
+		if (translation[song.source.type]) {
+			output.source = translation[song.source.type]
+			output.sourceid = song.source.id
+		}
+		return output
+	}
+
+	/**
+	 * Websocket
+	 */
+	// const server = new (require('ws')).Server({port: 16363, host: '127.0.0.1'})
+	// const connection = new Promise(resolve => server.once('connection', connection => resolve(connection)))
+	// connection.then(webSocket => webSocket.on('message', receiveMessage))
+	// const postMessage = (command, data) => connection.then(webSocket => webSocket.send(JSON.stringify({command, data})))
+
+	/**
+	 * Long Polling
+	 */
+	// const caller = new events.EventEmitter()
+	// const queue = []
+
+	// const server = require('http').createServer((req, res) => {
+	// 	if (req.url != '/') return
+	// 	new Promise(resolve => {
+	// 		let timer
+	// 		if (queue.length > 0) return resolve(queue.shift())
+	// 		const shift = () => {
+	// 			caller.removeListener('message', shift)
+	// 			clearTimeout(timer)
+	// 			resolve(queue.shift())
+	// 		}
+	// 		caller.once('message', shift)
+	// 		timer = setTimeout(shift, 5000)
+	// 	})
+	// 	.then(message => {
+	// 		res.writeHead(message ? 200 : 204, {'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*'})
+	// 		res.end(message ? JSON.stringify(message) : undefined)
+	// 	})
+	// })
+	// .listen(16363, '127.0.0.1')
+	// const postMessage = (command, data) => (queue.push({command, data}), caller.emit('message'))
+
+	/**
+	 * Server-Sent Events
+	 */
+	const caller = new events.EventEmitter()
+	const server = require('http').createServer().listen(16363, '127.0.0.1')
+	server.on('request', (req, res) => {
+		if (req.url != '/') return
+		res.writeHead(200, {'Content-Type': 'text/event-stream', 'Access-Control-Allow-Origin': '*'}), res.write(': \n\n')
+		const listener = message => res.write('data: ' + JSON.stringify(message) + '\n\n')
+		caller.on('message', listener)
+		res.once('close', () => caller.removeListener('message', listener))
+	})
+	const postMessage = (command, data) => caller.emit('message', {command, data})
+
+	const receiveMessage = message => {
+		message = typeof(message) === 'object' ? message : JSON.parse(message)
+		const {type, body} = message
 		if (type == 'event') {
 			if (body.name == 'ready') {
 				runtime.event.emit('ready')
@@ -211,20 +252,26 @@ const DuplexChannel = context => {
 			}
 			else if (body.name == 'end') {
 				controller.next(true)
+				let song = body.data
+				if (song.source.type != 'djradio') api.song.log(logger(song))
 			}
 			else if (body.name == 'load') {
-				let playing = `${interaction.utility.stringify.song(body.data)}`
+				let song = body.data
+				let program = song.source.type === 'djradio'
+				let artist = interaction.utility.stringify.artist(song)
+				let album = song.album.name
+				let playing = [program ? album : artist, song.name].join(' - ')
 				vscode.window.showInformationMessage(`正在播放: ${playing}`)
 				runtime.playerBar.update(playing)
-				api.song.log(body.data.id)
+				if (song.source.type == 'djradio') api.program.listen(song.id)
 			}
 			else if (body.name == 'lyric') {
 				runtime.playerBar.update(body.data)
 			}
 			else if (body.name == 'volume') {
 				runtime.playerBar.volume(body.data)
-				runtime.sceneKeeper.save('muted', body.data.muted)
-				runtime.sceneKeeper.save('volume', body.data.value)
+				runtime.globalStorage.set('muted', body.data.muted)
+				runtime.globalStorage.set('volume', body.data.value)
 			}
 			else if (['play', 'pause'].includes(body.name)) {
 				runtime.playerBar.state(body.name)
@@ -236,10 +283,9 @@ const DuplexChannel = context => {
 	}
 
 	return {
-		dispose: () => webSocketd.close(),
-		postMessage: (command, data) => {
-			if (webSocket) webSocket.send(JSON.stringify({command, data}))
-		}
+		dispose: () => server.close(),
+		postMessage,
+		receiveMessage
 	}
 }
 
@@ -248,10 +294,16 @@ const WebviewPanel = context => {
 	const panel = vscode.window.createWebviewPanel(
 		'neteasemusic', 'NeteaseMusic',
 		{preserveFocus: true, viewColumn: vscode.ViewColumn.One},
-		{enableScripts: true, retainContextWhenHidden: true}
+		{enableScripts: true, retainContextWhenHidden: true, portMapping: [{webviewPort: 16363, extensionHostPort: 16363}]}
 	)
 	panel.iconPath = ['light', 'dark'].reduce((uri, theme) => Object.assign(uri, {[theme]: vscode.Uri.file(path.join(context.extensionPath, `${theme}.svg`))}), {})
-	panel.webview.html = fs.readFileSync(vscode.Uri.file(path.join(context.extensionPath, 'index.html')).fsPath, 'utf-8')
+	panel.webview.html =
+		fs.readFileSync(vscode.Uri.file(path.join(context.extensionPath, 'index.html')).fsPath, 'utf-8')
+		.replace('<base>', `<base href="${vscode.Uri.file(path.join(context.extensionPath, '/')).with({scheme: 'vscode-resource'})}">`)
+
+	panel.webview.onDidReceiveMessage(runtime.duplexChannel.receiveMessage, undefined, context.subscriptions)
+	panel.onDidDispose(() => runtime.event.emit('suspend'), null, context.subscriptions)
+
 	return {
 		dispose: () => panel.dispose()
 	}
@@ -269,6 +321,8 @@ const CommandManager = context => {
 		'user.playlist': interaction.user.playlist,
 		'user.artist': interaction.user.artist,
 		'user.album': interaction.user.album,
+		'user.djradio': interaction.user.djradio,
+		'user.record': interaction.user.record,
 		'recommend.song': interaction.recommend.song,
 		'recommend.playlist': interaction.recommend.playlist,
 		'recommend.radio': interaction.recommend.radio,
@@ -298,14 +352,15 @@ const CommandManager = context => {
 
 		'mode.loop': () => controller.mode(1),
 		'mode.repeat': () => controller.mode(2),
-		'mode.random': () => controller.mode(0)
+		'mode.random': () => controller.mode(controller.favorite() ? 3 : 0),
+		'mode.intelligent': () => controller.mode(0)
 	}
-	
+
 	const registration = Object.keys(commands).map(name => vscode.commands.registerCommand(`neteasemusic.${name}`, commands[name]))
 	registration.forEach(command => context.subscriptions.push(command))
 
 	return {
-		execute: name => {if (name in commands) commands[name]()},
+		execute: name => name in commands ? commands[name].call() : null,
 		dispose: () => registration.forEach(command => command.dispose())
 	}
 }
@@ -315,7 +370,6 @@ const runtime = {
 	stateManager: null,
 	globalStorage: null,
 	preferenceReader: null,
-	sceneKeeper: null,
 	playerBar: null,
 	webviewPanel: null,
 	duplexChannel: null,
@@ -329,26 +383,24 @@ const runtime = {
 	},
 	activate: context => {
 		if (runtime.webviewPanel) return
-		// console.log('global state', context.globalState.get('user'))
 
 		runtime.event = new events.EventEmitter()
 		runtime.stateManager = StateManager(context)
 		runtime.globalStorage = GlobalStorage(context)
 		runtime.preferenceReader = PreferenceReader(context)
-		runtime.sceneKeeper = SceneKeeper(context)
 		runtime.playerBar = PlayerBar(context)
 		runtime.duplexChannel = DuplexChannel(context)
 		runtime.webviewPanel = WebviewPanel(context)
 		runtime.commandManager = CommandManager(context)
 
 		process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = runtime.preferenceReader.get('SSL.strict') ? undefined : 0
-		
-		runtime.event.on('ready', () => 
+
+		runtime.event.once('ready', () =>
 			Promise.all([api, controller].map(component => component.refresh()))
-			.then(() => runtime.sceneKeeper.restore())
+			.then(() => controller.restore())
 			.then(() => runtime.stateManager.set('on', true))
 		)
-		runtime.event.on('suspend', () => runtime.dispose())
+		runtime.event.once('suspend', () => runtime.dispose())
 	}
 }
 

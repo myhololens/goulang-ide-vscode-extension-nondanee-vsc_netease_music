@@ -2,13 +2,13 @@
     "name": "vsc-netease-music",
     "displayName": "VSC Netease Music",
     "description": "UNOFFICIAL Netease Music extension for Visual Studio Code",
-    "version": "0.0.17",
+    "version": "0.0.24",
     "icon": "icon.png",
     "publisher": "nondanee",
     "repository": "https://github.com/nondanee/vsc-netease-music.git",
     "license": "MIT",
     "engines": {
-        "vscode": "^1.28.0"
+        "vscode": "^1.34.0"
     },
     "categories": [
         "Other"
@@ -150,6 +150,16 @@
                 "category": "%category.neteasemusic.my%"
             },
             {
+                "command": "neteasemusic.user.djradio",
+                "title": "%command.neteasemusic.user.djradio%",
+                "category": "%category.neteasemusic.my%"
+            },
+            {
+                "command": "neteasemusic.user.record",
+                "title": "%command.neteasemusic.user.record%",
+                "category": "%category.neteasemusic.my%"
+            },
+            {
                 "command": "neteasemusic.new.song",
                 "title": "%command.neteasemusic.new.song%",
                 "category": "%category.neteasemusic.discover%"
@@ -192,6 +202,11 @@
             {
                 "command": "neteasemusic.mode.random",
                 "title": "%command.neteasemusic.mode.random%",
+                "category": "%category.neteasemusic.mode%"
+            },
+            {
+                "command": "neteasemusic.mode.intelligent",
+                "title": "%command.neteasemusic.mode.intelligent%",
                 "category": "%category.neteasemusic.mode%"
             }
         ],
@@ -313,12 +328,20 @@
                     "when": "neteasemusic.on && neteasemusic.logged"
                 },
                 {
+                    "command": "neteasemusic.user.djradio",
+                    "when": "neteasemusic.on && neteasemusic.logged"
+                },
+                {
+                    "command": "neteasemusic.user.record",
+                    "when": "neteasemusic.on && neteasemusic.logged"
+                },
+                {
                     "command": "neteasemusic.user.playlist",
                     "when": "neteasemusic.on && neteasemusic.logged"
                 },
                 {
                     "command": "neteasemusic.like",
-                    "when": "neteasemusic.on && neteasemusic.logged && neteasemusic.track && !neteasemusic.liked"
+                    "when": "neteasemusic.on && neteasemusic.logged && neteasemusic.track && !neteasemusic.liked && !neteasemusic.program"
                 },
                 {
                     "command": "neteasemusic.dislike",
@@ -383,6 +406,10 @@
                 {
                     "command": "neteasemusic.mode.random",
                     "when": "neteasemusic.on && neteasemusic.track && neteasemusic.mode == 2 && !neteasemusic.radio"
+                },
+                {
+                    "command": "neteasemusic.mode.intelligent",
+                    "when": "neteasemusic.on && neteasemusic.track && neteasemusic.mode == 3 && !neteasemusic.radio"
                 }
             ]
         }
@@ -392,13 +419,7 @@
         "test": "node ./node_modules/vscode/bin/test"
     },
     "devDependencies": {
-        "typescript": "^2.6.1",
-        "vscode": "^1.1.21",
-        "eslint": "^4.11.0",
-        "@types/node": "^8.10.25",
-        "@types/mocha": "^2.2.42"
+        "vscode": "^1.1.34"
     },
-    "dependencies": {
-        "ws": "^6.1.3"
-    }
+    "dependencies": {}
 }

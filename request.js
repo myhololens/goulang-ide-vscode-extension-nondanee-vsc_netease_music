@@ -12,19 +12,24 @@ const encrypt = object => {
 	return {eparams: Buffer.concat([cipher.update(buffer), cipher.final()]).toString('hex').toUpperCase()}
 }
 
-const request = (method, url, headers, body = null) => new Promise((resolve, reject) => {
-	(url.startsWith('https://') ? https.request : http.request)(Object.assign(parse(url), {method, headers}))
-	.on('response', response => resolve([201, 301, 302, 303, 307, 308].includes(response.statusCode) ? request(method, parse(url).resolve(response.headers.location), headers, body) : response))
-	.on('error', error => reject(error)).end(body)
-})
+const request = (method, url, headers, body = null) =>
+	new Promise((resolve, reject) => {
+		(url.startsWith('https://') ? https.request : http.request)(Object.assign(parse(url), {method, headers}))
+		.on('response', response => resolve([201, 301, 302, 303, 307, 308].includes(response.statusCode) ? request(method, parse(url).resolve(response.headers.location), headers, body) : response))
+		.on('error', error => reject(error)).end(body)
+	})
 
-const json = response => new Promise((resolve, reject) => {
-	let chunks = []
-	response
-	.on('data', chunk => chunks.push(chunk))
-	.on('end', () => {try{resolve(JSON.parse(Buffer.concat(chunks)))}catch(error){reject(error)}})
-	.on('error', error => reject(error))
-})
+const json = response =>
+	new Promise((resolve, reject) => {
+		let chunks = []
+		response
+		.on('data', chunk => chunks.push(chunk))
+		.on('end', () => resolve(Buffer.concat(chunks)))
+		.on('error', error => reject(error))
+	})
+	.then(body =>
+		JSON.parse(body.toString().replace(/([^\\]"\s*:\s*)(\d{16,})(\s*[}|,])/g, '$1"$2"$3'))
+	)
 
 const apiRequest = (path, data, load = true) => {
 	const method = 'POST'
@@ -42,24 +47,45 @@ const apiRequest = (path, data, load = true) => {
 
 const api = {
 	user: {
-		detail: id => apiRequest(`v1/user/detail/${id|| user.id}`, {}),
+		detail: id => apiRequest(`v1/user/detail/${id || user.id}`, {}),
 		artist: () => apiRequest(`artist/sublist`, {limit: 1000, offset: 0}),
 		album: () => apiRequest(`album/sublist`, {limit: 1000, offset: 0}),
-		playlist: id => apiRequest('user/playlist', {uid: id || user.id, limit: 100000}),
+		djradio: () => apiRequest('djradio/get/subed', {limit: 1000, offset: 0}),
+		playlist: (id, compact) => apiRequest('user/playlist', {uid: id || user.id, limit: compact ? 1 : 100000}),
+		record: id => Promise.all([0, 1].map(type => apiRequest('v1/play/record', {uid: id || user.id, type}))).then(data => Object.assign(data[0], data[1])),
 		likes: () => apiRequest('song/like/get', {}),
-		account: () => user.id
+		account: id => id ? user.id === id : user.id,
+		favorite: id => id ? user.favor === id : user.favor
 	},
 	artist: {
 		song: id => apiRequest(`v1/artist/${id}`, {top: 50}),
 		album: id =>
 			Promise.all([apiRequest(`artist/albums/${id}`, {limit: 1000, offset: 0}), apiRequest(`artist/detail/v4`, {id}), apiRequest(`artist/detail/dynamic`, {id})])
-			.then(data => {data[0].artist.fansNum = data[1].fansNum; data[0].artist.followed = data[2].followed; return data[0]}),
+			.then(data => (data[0].artist.fansNum = data[1].fansNum, data[0].artist.followed = data[2].followed, false) || data[0]),
 		subscribe: (id, action) => apiRequest(`artist/${action ? 'sub' : 'unsub'}`, {artistId: id, artistIds: [id]})
 	},
+	djradio: {
+		program: id => apiRequest('dj/program/byradio', {radioId: id, limit: 500})
+		.then(data =>
+			Promise.all(
+				Array.from(Array(Math.ceil(data.programs[0].radio.programCount / 500) - 1).keys()).map(group =>
+				apiRequest('dj/program/byradio', {radioId: id, limit: 500, offset: 500 * (group + 1)}))
+			)
+			.then(rest => rest.forEach(part => Array.prototype.push.apply(data.programs, part.programs)))
+			.then(() => data)
+		),
+		subscribe: (id, action) => apiRequest(`djradio/${action ? 'sub' : 'unsub'}`, {id})
+	},
+	program: {
+		detail: id => apiRequest('dj/program/detail', {id}),
+		listen: id => apiRequest('dj/program/listen', {id}),
+		url: id => api.program.detail(id).then(data => api.song.url(data.program.mainTrackId)),
+		comment: id => apiRequest(`v1/resource/comments/A_DJ_1_${id}`, {rid: `A_DJ_1_${id}`, limit: 50, offset: 0})
+	},
 	album: {
-		detail: id => 
+		detail: id =>
 			Promise.all([apiRequest(`v1/album/${id}`, {}), apiRequest('album/detail/dynamic', {id})])
-			.then(data => {Object.assign(data[0].album.info, data[1]); return data[0]}),
+			.then(data => (Object.assign(data[0].album.info, data[1]), false) || data[0]),
 		subscribe: (id, action) => apiRequest(`album/${action ? 'sub' : 'unsub'}`, {id})
 	},
 	playlist: {
@@ -74,7 +100,8 @@ const api = {
 		),
 		highquality: () => apiRequest('playlist/highquality/list', {cat: '全部', limit: 50}),
 		hot: () => apiRequest('playlist/list', {cat: '全部', limit: 50, offset: 0, order: 'hot'}),
-		subscribe: (id, action) => apiRequest(`playlist/${action ? 'subscribe' : 'unsubscribe'}`, {id})
+		subscribe: (id, action) => apiRequest(`playlist/${action ? 'subscribe' : 'unsubscribe'}`, {id}),
+		intelligence: (id, pid) => apiRequest('playmode/intelligence/list', {songId: id, startMusicId: id, playlistId: pid || user.favor, count: 1, type: 'fromPlayAll'})
 	},
 	toplist: () => apiRequest('toplist', {}),
 	song: {
@@ -84,8 +111,8 @@ const api = {
 		like: id => apiRequest('song/like', {trackId: id, like: true, time: 0, userid: 0}),
 		dislike: id => apiRequest('song/like', {trackId: id, like: false, time: 0, userid: 0}),
 		collect: (id, pid) => apiRequest('playlist/manipulate/tracks', {trackIds: [id], pid: pid, op: 'add'}),
-		comment: id => apiRequest(`v1/resource/hotcomments/R_SO_4_${id}`, {rid: id, limit: 50, offset: 0}),
-		log: id => apiRequest('feedback/weblog', {logs: [{action: 'play', json: {id, type: 'song'}}]})
+		comment: id => apiRequest(`v1/resource/comments/R_SO_4_${id}`, {rid: id, limit: 50, offset: 0}),
+		log: data => apiRequest('feedback/weblog', {logs: JSON.stringify([{action: 'play', json: data}])})
 	},
 	recommend: {
 		song: () => apiRequest('v1/discovery/recommend/songs', {limit: 30, offset: 0}),
@@ -107,36 +134,25 @@ const api = {
 		let path = '', data = {password: crypto.createHash('md5').update(password).digest('hex'), rememberLogin: 'true'}
 		account.includes('@') ? (Object.assign(data, {username: account}), path = 'login') : (Object.assign(data, {phone: account.replace(area, ''), countrycode: (area || '').replace('+', '')}), path = 'login/cellphone')
 		return apiRequest(path, data, false)
-		.then(response => {
-			if (response.headers['set-cookie']) user.cookie = response.headers['set-cookie'].map(cookie => cookie.replace(/;.*/,'')).join('; ')
-			return response
-		})
-		.then(json).then(data => {
-			if (data.code === 200) {
-				user.id = data.account.id
-				sync()
-				return Promise.resolve(data)
-			}
-			else {
-				return Promise.reject(data)
-			}
-		})
+		.then(response =>
+			response.headers['set-cookie'] ? api.refresh(response.headers['set-cookie'].map(cookie => cookie.replace(/;.*/, '')).join('; ')) : json(response).then(data => Promise.reject(data))
+		)
 	},
 	logout: () => {
 		user = {}
-		sync()
+		return sync()
 	},
 	sign: () => apiRequest('point/dailyTask', {type: 1}),
 	refresh: cookie => {
-		user = cookie ? {cookie} : JSON.parse(runtime.globalStorage.get('user') || '{}')
-		return apiRequest('/user/info', {}).then(data => data.code === 200 ? user.id = data.userPoint.userId : user = {}).then(sync)
-	},
+		user = cookie ? {cookie} : (runtime.globalStorage.get('user') || {})
+		return apiRequest('user/info', {}).then(data => data.code === 200 ? user.id = data.userPoint.userId : user = {}).then(sync)
+	}
 }
 
 const sync = () => {
-	runtime.globalStorage.set('user', JSON.stringify(user))
+	runtime.globalStorage.set('user', user)
 	runtime.stateManager.set('logged', !!user.id)
-	return user.id ? api.user.detail().then(data => runtime.stateManager.set('signed', !!data.pcSign) || data) : Promise.resolve()
+	return user.id ? Promise.all([api.user.detail(), api.user.playlist(null, true)]).then(data => (runtime.stateManager.set('signed', !!data[0].pcSign), user.favor = data[1].playlist[0].id, false) || data[0]) : Promise.resolve()
 }
 
 module.exports = api
